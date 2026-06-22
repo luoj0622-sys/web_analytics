@@ -1,0 +1,72 @@
+app:
+  name: web-analytics
+  environment: local
+
+http:
+  collector_addr: ":8080"
+  dashboard_addr: ":8081"
+
+postgres:
+  dsn: "postgres://webanalytics:webanalytics@localhost:5432/webanalytics?sslmode=disable"
+  max_open_conns: 50
+  max_idle_conns: 10
+  conn_max_lifetime: 30m
+  migrations_dir: "migrations"
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+  online_key_prefix: "analytics:online"
+  cache_key_prefix: "analytics:cache"
+
+queue:
+  driver: redis-streams
+  stream: analytics:events
+  consumer_group: analytics-workers
+  consumer_name: worker-local
+  max_len_approx: 1000000
+  pending_idle_timeout: 5m
+  dead_letter_stream: analytics:events:dead
+
+storage:
+  driver: postgres
+  raw_events_table: raw_events
+  aggregate_schema: public
+
+worker:
+  batch_size: 1000
+  flush_interval: 1s
+  idle_timeout: 1s
+  max_retries: 3
+
+online:
+  window: 5m
+  heartbeat_interval: 30s
+
+retention:
+  raw_days: 30
+  minute_aggregate_days: 15
+  hour_aggregate_days: 365
+  day_aggregate_days: 0
+  create_partitions_ahead_days: 7
+  expired_raw_action: archive
+
+capacity:
+  stable_events_per_day: 30000000
+  stretch_events_per_day: 50000000
+  degradation_policy:
+    - keep_collector_accepting_valid_events
+    - allow_dashboard_freshness_to_lag_under_backlog
+    - scale_workers_before_replacing_queue_or_storage
+
+future_backends:
+  queue:
+    current: redis-streams
+    candidates:
+      - rabbitmq
+      - kafka
+  analytics_store:
+    current: postgres
+    candidates:
+      - clickhouse

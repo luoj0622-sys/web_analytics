@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "test:sdk": "node --test sdk/*.test.mjs"
+  },
+  "devDependencies": {}
+}
