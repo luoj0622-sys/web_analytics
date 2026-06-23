@@ -28,6 +28,65 @@ services:
       timeout: 5s
       retries: 5
 
+  collector:
+    build:
+      context: .
+      args:
+        CMD: collector
+    ports:
+      - "8080:8080"
+    environment:
+      WA_COLLECTOR_ADDR: ":8080"
+      WA_POSTGRES_DSN: "postgres://webanalytics:webanalytics@postgres:5432/webanalytics?sslmode=disable"
+      WA_REDIS_ADDR: "redis:6379"
+      WA_QUEUE_DRIVER: "redis-streams"
+      WA_QUEUE_STREAM: "analytics:events"
+      WA_QUEUE_CONSUMER_GROUP: "analytics-workers"
+      WA_STORAGE_DRIVER: "postgres"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: .
+      args:
+        CMD: dashboard
+    ports:
+      - "8081:8081"
+    environment:
+      WA_DASHBOARD_ADDR: ":8081"
+      WA_POSTGRES_DSN: "postgres://webanalytics:webanalytics@postgres:5432/webanalytics?sslmode=disable"
+      WA_REDIS_ADDR: "redis:6379"
+      WA_STORAGE_DRIVER: "postgres"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      args:
+        CMD: worker
+    environment:
+      WA_POSTGRES_DSN: "postgres://webanalytics:webanalytics@postgres:5432/webanalytics?sslmode=disable"
+      WA_REDIS_ADDR: "redis:6379"
+      WA_QUEUE_DRIVER: "redis-streams"
+      WA_QUEUE_STREAM: "analytics:events"
+      WA_QUEUE_CONSUMER_GROUP: "analytics-workers"
+      WA_STORAGE_DRIVER: "postgres"
+      WA_WORKER_BATCH_SIZE: "1000"
+      WA_WORKER_FLUSH_INTERVAL: "1s"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:
