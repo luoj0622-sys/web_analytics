@@ -34,9 +34,9 @@ services:
       args:
         CMD: collector
     ports:
-      - "8080:8080"
+      - "8085:8085"
     environment:
-      WA_COLLECTOR_ADDR: ":8080"
+      WA_COLLECTOR_ADDR: ":8085"
       WA_POSTGRES_DSN: "postgres://webanalytics:webanalytics@postgres:5432/webanalytics?sslmode=disable"
       WA_REDIS_ADDR: "redis:6379"
       WA_QUEUE_DRIVER: "redis-streams"
@@ -55,9 +55,9 @@ services:
       args:
         CMD: dashboard
     ports:
-      - "8081:8081"
+      - "8086:8086"
     environment:
-      WA_DASHBOARD_ADDR: ":8081"
+      WA_DASHBOARD_ADDR: ":8086"
       WA_POSTGRES_DSN: "postgres://webanalytics:webanalytics@postgres:5432/webanalytics?sslmode=disable"
       WA_REDIS_ADDR: "redis:6379"
       WA_STORAGE_DRIVER: "postgres"
