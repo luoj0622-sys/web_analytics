@@ -30,6 +30,15 @@ func TestServiceReturnsOnlineOverviewTrendAndDimensions(t *testing.T) {
 	if overview.PageViews != 10 {
 		t.Fatalf("page views = %d, want 10", overview.PageViews)
 	}
+	if overview.IPCount != 6 {
+		t.Fatalf("ip count = %d, want 6", overview.IPCount)
+	}
+	if overview.ActiveVisitors != 42 {
+		t.Fatalf("active visitors = %d, want 42", overview.ActiveVisitors)
+	}
+	if overview.BlendedVisitors != 42 {
+		t.Fatalf("blended visitors = %d, want 42", overview.BlendedVisitors)
+	}
 
 	trend, err := service.Trend(context.Background(), Query{SiteID: "site_1", Grain: store.GrainHour})
 	if err != nil {
@@ -74,6 +83,7 @@ func (f *fakeStatsReader) QuerySiteStats(context.Context, store.SiteStatsQuery) 
 			Grain:          store.GrainHour,
 			Bucket:         time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
 			PageViews:      10,
+			IPCount:        6,
 			UniqueVisitors: 7,
 			Sessions:       8,
 			CustomEvents:   2,
@@ -89,6 +99,7 @@ func (f *fakeStatsReader) QueryDimensionStats(context.Context, store.DimensionSt
 			Dimension: store.DimensionPage,
 			Key:       "/pricing",
 			PageViews: 10,
+			IPCount:   6,
 		}},
 	}, nil
 }

@@ -76,6 +76,7 @@ func aggregateSiteStats(events []domain.EventEnvelope) []store.SiteStat {
 	}
 	seenVisitors := make(map[key]map[string]struct{})
 	seenSessions := make(map[key]map[string]struct{})
+	seenIPs := make(map[key]map[string]struct{})
 	stats := make(map[key]store.SiteStat)
 
 	for _, event := range events {
@@ -105,6 +106,12 @@ func aggregateSiteStats(events []domain.EventEnvelope) []store.SiteStat {
 		if event.Visitor.SessionID != "" {
 			seenSessions[k][event.Visitor.SessionID] = struct{}{}
 		}
+		if seenIPs[k] == nil {
+			seenIPs[k] = make(map[string]struct{})
+		}
+		if event.Network.IP != "" {
+			seenIPs[k][event.Network.IP] = struct{}{}
+		}
 		stats[k] = stat
 	}
 
@@ -112,6 +119,7 @@ func aggregateSiteStats(events []domain.EventEnvelope) []store.SiteStat {
 	for k, stat := range stats {
 		stat.UniqueVisitors = int64(len(seenVisitors[k]))
 		stat.Sessions = int64(len(seenSessions[k]))
+		stat.IPCount = int64(len(seenIPs[k]))
 		out = append(out, stat)
 	}
 	return out
@@ -126,6 +134,8 @@ func aggregateDimensionStats(events []domain.EventEnvelope) []store.DimensionSta
 	}
 	stats := make(map[key]store.DimensionStat)
 	seenVisitors := make(map[key]map[string]struct{})
+	seenSessions := make(map[key]map[string]struct{})
+	seenIPs := make(map[key]map[string]struct{})
 
 	add := func(event domain.EventEnvelope, dimension store.Dimension, value string, pageViews, eventCount int64) {
 		if value == "" {
@@ -146,6 +156,18 @@ func aggregateDimensionStats(events []domain.EventEnvelope) []store.DimensionSta
 		if event.Visitor.ID != "" {
 			seenVisitors[k][event.Visitor.ID] = struct{}{}
 		}
+		if seenSessions[k] == nil {
+			seenSessions[k] = make(map[string]struct{})
+		}
+		if event.Visitor.SessionID != "" {
+			seenSessions[k][event.Visitor.SessionID] = struct{}{}
+		}
+		if seenIPs[k] == nil {
+			seenIPs[k] = make(map[string]struct{})
+		}
+		if event.Network.IP != "" {
+			seenIPs[k][event.Network.IP] = struct{}{}
+		}
 		stats[k] = stat
 	}
 
@@ -164,6 +186,8 @@ func aggregateDimensionStats(events []domain.EventEnvelope) []store.DimensionSta
 	out := make([]store.DimensionStat, 0, len(stats))
 	for k, stat := range stats {
 		stat.UniqueVisitors = int64(len(seenVisitors[k]))
+		stat.Sessions = int64(len(seenSessions[k]))
+		stat.IPCount = int64(len(seenIPs[k]))
 		out = append(out, stat)
 	}
 	return out

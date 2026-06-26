@@ -37,8 +37,14 @@ func TestProcessorWritesRawAggregatesAndAcknowledges(t *testing.T) {
 	if len(stats.upserts) == 0 {
 		t.Fatal("expected aggregate upserts")
 	}
+	if stats.upserts[0].IPCount != 1 {
+		t.Fatalf("site ip count = %d, want 1", stats.upserts[0].IPCount)
+	}
 	if len(stats.dimensionUpserts) == 0 {
 		t.Fatal("expected dimension aggregate upserts")
+	}
+	if stats.dimensionUpserts[0].IPCount != 1 {
+		t.Fatalf("dimension ip count = %d, want 1", stats.dimensionUpserts[0].IPCount)
 	}
 	if len(consumer.acked) != 2 {
 		t.Fatalf("acked = %v, want 2 ids", consumer.acked)
@@ -77,6 +83,7 @@ func event(id string, typ domain.EventType, path string) domain.EventEnvelope {
 		OccurredAt: time.Date(2026, 6, 22, 10, 35, 0, 0, time.UTC),
 		Visitor:    domain.Visitor{ID: "visitor_1", SessionID: "session_1"},
 		Page:       domain.Page{Path: path},
+		Network:    domain.Network{IP: "ip_hash_1"},
 	}
 }
 

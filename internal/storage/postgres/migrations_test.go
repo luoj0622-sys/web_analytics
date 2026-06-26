@@ -56,6 +56,22 @@ func TestMigrationsDefineAggregateAndRetentionTables(t *testing.T) {
 	}
 }
 
+func TestMigrationsAddDashboardFrontendMetrics(t *testing.T) {
+	sql := readMigration(t, "004_dashboard_frontend_metrics.sql")
+
+	for _, fragment := range []string{
+		"ALTER TABLE stats_site_hour",
+		"ADD COLUMN IF NOT EXISTS ip_count",
+		"ALTER TABLE stats_referrer_day",
+		"ADD COLUMN IF NOT EXISTS sessions",
+		"ALTER TABLE stats_event_day",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("004_dashboard_frontend_metrics.sql missing %q", fragment)
+		}
+	}
+}
+
 func readMigration(t *testing.T, name string) string {
 	t.Helper()
 

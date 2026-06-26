@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Web Analytics Dashboard</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Web Analytics</p>
+          <h1>流量看板</h1>
+        </div>
+        <form id="filters" class="filters">
+          <label>
+            <span>站点 ID</span>
+            <input id="siteId" name="siteId" value="site_1" autocomplete="off">
+          </label>
+          <label>
+            <span>粒度</span>
+            <select id="grain" name="grain">
+              <option value="hour" selected>小时</option>
+              <option value="minute">分钟</option>
+              <option value="day">天</option>
+            </select>
+          </label>
+          <label>
+            <span>开始</span>
+            <input id="from" name="from" type="date">
+          </label>
+          <label>
+            <span>结束</span>
+            <input id="to" name="to" type="date">
+          </label>
+          <button type="submit">刷新</button>
+        </form>
+      </header>
+
+      <section id="status" class="status" aria-live="polite"></section>
+
+      <section class="metrics" aria-label="核心指标">
+        <article class="metric"><span>浏览量 PV</span><strong id="metricPv">0</strong></article>
+        <article class="metric"><span>IP 数</span><strong id="metricIp">0</strong></article>
+        <article class="metric"><span>访问次数 Session</span><strong id="metricSessions">0</strong></article>
+        <article class="metric"><span>活跃访客 UV</span><strong id="metricActiveUv">0</strong></article>
+        <article class="metric"><span>活跃访客跨天加和</span><strong id="metricSummedUv">0</strong></article>
+        <article class="metric"><span>累计访客 UV</span><strong id="metricCumulativeUv">0</strong></article>
+        <article class="metric"><span>融合访客 UV</span><strong id="metricBlendedUv">0</strong></article>
+      </section>
+
+      <section class="panel">
+        <div class="panelHead">
+          <h2>指标趋势</h2>
+          <span id="rowCount">0 个时间点</span>
+        </div>
+        <div id="trendChart" class="chart" role="img" aria-label="流量指标折线图"></div>
+      </section>
+
+      <section class="tables">
+        <article class="panel">
+          <div class="panelHead">
+            <h2>来路域名</h2>
+            <span id="domainCount">0 条</span>
+          </div>
+          <div class="tableWrap">
+            <table>
+              <thead>
+                <tr><th>域名</th><th>PV</th><th>IP</th><th>UV</th><th>Session</th></tr>
+              </thead>
+              <tbody id="domainRows"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panelHead">
+            <h2>来路页面</h2>
+            <span id="pageCount">0 条</span>
+          </div>
+          <div class="tableWrap">
+            <table>
+              <thead>
+                <tr><th>页面</th><th>PV</th><th>IP</th><th>UV</th><th>Session</th></tr>
+              </thead>
+              <tbody id="pageRows"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

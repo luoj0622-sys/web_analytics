@@ -1,205 +1,395 @@
 # Web Analytics
 
+自托管的网站流量分析系统，从前端埋点、事件采集、队列缓冲、后台消费、数据存储到看板查询提供一套完整的基础实现。
+
+Self-hosted web traffic analytics for your own websites: JavaScript SDK → collector → queue → workers → storage → dashboard.
+
+---
+
 ## 中文说明
 
-Web Analytics 是一个面向自有网站的自托管流量分析系统。项目目标是提供从前端埋点、事件采集、队列缓冲、后台消费、数据存储到统计查询的一套基础实现。
+### 系统组成
 
-当前实现采用的核心组件：
+| 组件 | 职责 |
+| --- | --- |
+| **JavaScript SDK** (`sdk/tracker.mjs`) | 页面访问、心跳、自定义事件上报 |
+| **Collector** (`cmd/collector`) | 接收事件、校验凭证、限流、写入队列、标记在线访客 |
+| **Worker** (`cmd/worker`) | 从队列批量消费事件，写入原始分区表与聚合统计表 |
+| **Dashboard** (`cmd/dashboard`) | 提供 JSON 统计 API，并托管浏览器看板页面 |
+| **Redis Streams** | 事件队列，缓冲采集到的访问事件 |
+| **Redis 在线状态** | 记录实时活跃访客 |
+| **PostgreSQL** | 业务数据、原始事件分区表、聚合统计表 |
 
-- Go 服务：负责事件采集、后台消费任务和 Dashboard API
-- Redis Streams：作为事件队列，缓冲采集到的访问事件
-- Redis 在线状态：用于记录实时活跃访客
-- PostgreSQL：存储业务数据、原始事件分区表和聚合统计表
-- JavaScript SDK：支持页面访问、心跳和自定义事件上报
+设计容量目标：稳定 3000 万事件/天，扩展 5000 万事件/天，依赖队列缓冲、批量写入、分区表、聚合优先查询与受控的原始数据保留策略。
 
-设计容量目标：
+### 数据流
 
-- 稳定目标：每天 3000 万事件
-- 扩展目标：每天 5000 万事件
+```text
+JS SDK ──POST /collect──▶ Collector ──▶ Redis Streams ──▶ Workers ──▶ PostgreSQL
+                              │                                         (原始分区表 + 聚合表)
+                              └──▶ Redis 在线状态
+                                                  Dashboard ──读取──▶ Redis 在线 + 聚合表
+```
 
-该目标依赖队列缓冲、批量写入、分区表、优先查询聚合表以及受控的原始数据保留策略。
+看板 API 优先读取 Redis 在线状态和聚合统计表，而不是直接查询原始事件分区表。
 
-### 当前状态
+### 功能
 
-本仓库目前是一个经过测试的第一版实现骨架，已经包含服务边界、数据库迁移、SDK、采集服务、Worker、Dashboard、保留策略规划器和运维文档。部分生产集成仍然通过接口保留：
+- 核心指标：浏览量 PV、IP 数、访问次数 Session、活跃访客 UV、活跃访客跨天加和、累计访客 UV、融合访客 UV
+- 指标趋势折线图（按分钟 / 小时 / 天聚合）
+- 来路域名、来路页面维度报表（PV / IP / UV / Session）
+- 多维度查询：页面、来路、UTM、设备、地理、自定义事件
+- 实时在线访客统计
+- 站点创建 API 与多站点隔离（按 `site_id` + `public_key`）
 
-- Collector 入口当前使用内存凭证和空发布器
-- Dashboard 入口当前使用内存或空读取器
-- PostgreSQL 和 Redis 适配器已经定义边界，但真实客户端接入还需要继续完善
-- RabbitMQ、Kafka 和 ClickHouse 作为后续替换方案，通过队列和存储接口保留扩展出口
+---
 
-### 本地依赖
+### 端口
 
-启动 PostgreSQL 和 Redis：
+启动方式不同，默认端口不同。
+
+| 服务 | `go run` 本地默认 | docker compose | 环境变量 |
+| --- | --- | --- | --- |
+| Collector | `:8080` | `:8085` | `WA_COLLECTOR_ADDR` |
+| Dashboard | `:8081` | `:8086` | `WA_DASHBOARD_ADDR` |
+| PostgreSQL | `localhost:5432` | `localhost:5432` | `WA_POSTGRES_DSN` |
+| Redis | `localhost:6379` | `localhost:6379` | `WA_REDIS_ADDR` |
+
+> docker-compose.yml 通过环境变量把端口改成了 8085 / 8086。如果你用 `go run` 直接启动，端口是 8080 / 8081。下文示例以本地 `go run`（8080 / 8081）为准。
+
+---
+
+### 怎么用
+
+#### 1. 启动依赖
 
 ```bash
 docker compose up -d postgres redis
 ```
 
-默认本地服务：
-
-- PostgreSQL：`localhost:5432`
-- Redis：`localhost:6379`
-- Collector：`:8080`
-- Dashboard：`:8081`
-
-### 服务启动
+执行数据库迁移（按文件名顺序应用 `migrations/*.sql`）：
 
 ```bash
-go run ./cmd/collector
-go run ./cmd/dashboard
+for f in migrations/*.sql; do
+  psql "postgres://webanalytics:webanalytics@localhost:5432/webanalytics?sslmode=disable" -f "$f"
+done
+```
+
+#### 2. 启动服务
+
+本地分别启动三个服务：
+
+```bash
+go run ./cmd/collector   # 监听 :8080
+go run ./cmd/dashboard   # 监听 :8081
 go run ./cmd/worker
+```
+
+或用 docker compose 一键启动全部（端口为 8085 / 8086）：
+
+```bash
+docker compose up -d
 ```
 
 健康检查：
 
 ```bash
-curl -s http://localhost:8080/healthz
-curl -s http://localhost:8081/healthz
+curl -s http://localhost:8080/healthz   # collector
+curl -s http://localhost:8081/healthz   # dashboard
 ```
+
+#### 3. 打开看板
+
+浏览器访问 dashboard 地址：
+
+- 本地 `go run`：`http://localhost:8081/`
+- docker compose：`http://localhost:8086/`
+
+页面顶部输入站点 ID、选择粒度和时间范围，点击「刷新」即可查看指标、趋势图和来路报表。
+
+> 配置说明：当前 Collector / Dashboard 入口使用内存凭证和空读取器作为骨架实现，真实的 PostgreSQL / Redis 客户端接入仍在完善中。看板页面调用真实 API，但返回数据依赖后端读取器的接入程度。
+
+---
+
+### 怎么埋点
+
+#### 引入 SDK
+
+SDK 是一个零依赖的 ES Module，位于 `sdk/tracker.mjs`，把它部署到你的静态资源目录后引入：
+
+```html
+<script type="module">
+  import { createTracker } from "/sdk/tracker.mjs";
+
+  const tracker = createTracker({
+    siteId: "site_1",                          // 站点 ID
+    publicKey: "pk_xxx",                        // 站点公钥（采集凭证）
+    collectUrl: "http://localhost:8080/collect" // Collector 采集地址
+  });
+
+  // 页面访问
+  tracker.trackPageView();
+
+  // 心跳（用于在线访客统计，建议定时调用）
+  setInterval(() => tracker.heartbeat(), 30_000);
+
+  // 自定义事件
+  tracker.track("signup", { plan: "pro", price: 99 });
+</script>
+```
+
+#### SDK 接口
+
+| 方法 | 上报事件类型 | 说明 |
+| --- | --- | --- |
+| `trackPageView()` | `page_view` | 上报当前页面访问 |
+| `heartbeat()` | `heartbeat` | 上报心跳，维持在线访客状态 |
+| `track(name, properties)` | `custom` | 上报自定义事件，`properties` 为结构化对象 |
+
+SDK 会自动处理：
+
+- 访客 ID / 会话 ID 的生成与本地持久化（`localStorage`，键名 `wa:<siteId>:visitor_id` / `session_id`）
+- 当前页面信息（URL、路径、标题、来源 referrer）
+- UTM 参数（`utm_source` / `utm_medium` / `utm_campaign` / `utm_term` / `utm_content`）
+- 设备信息（User-Agent、语言）
+
+#### 采集接口（直接调用）
+
+如果不使用 SDK，也可以直接向 Collector 发送 JSON：
+
+```bash
+curl -X POST http://localhost:8080/collect \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "page_view",
+    "site_id": "site_1",
+    "public_key": "pk_xxx",
+    "occurred_at": "2026-06-26T10:00:00Z",
+    "visitor": { "id": "v_abc", "session_id": "s_abc" },
+    "page": { "url": "https://example.com/", "path": "/", "title": "Home", "referrer": "" },
+    "campaign": { "source": "", "medium": "", "campaign": "" },
+    "device": { "user_agent": "Mozilla/5.0", "language": "zh-CN" }
+  }'
+```
+
+成功返回 `204 No Content`；凭证无效返回 `401`。
+
+---
+
+### 看板 API
+
+Dashboard 同时托管静态页面（`/`）和 JSON API（`/api/...`）。
+
+| 方法 / 路径 | 说明 |
+| --- | --- |
+| `POST /api/sites` | 创建站点（需 `X-Owner-User-ID` 请求头） |
+| `GET /api/sites/{siteID}/online` | 实时在线访客数 |
+| `GET /api/sites/{siteID}/overview` | 核心指标汇总 |
+| `GET /api/sites/{siteID}/trend` | 指标趋势（折线图数据） |
+| `GET /api/sites/{siteID}/dimensions` | 维度报表 |
+
+通用查询参数：
+
+- `grain`：`minute` / `hour` / `day`（默认 `hour`）
+- `from` / `to`：时间范围，支持 `2006-01-02` 或 RFC3339
+- `dimension`（仅 `/dimensions`）：`page` / `referrer` / `utm` / `device` / `geo` / `event`（默认 `page`）
+- `limit`（仅 `/dimensions`）：返回行数上限
+
+示例：
+
+```bash
+curl -s "http://localhost:8081/api/sites/site_1/overview?grain=day&from=2026-06-01&to=2026-06-26"
+curl -s "http://localhost:8081/api/sites/site_1/dimensions?dimension=referrer&limit=20"
+```
+
+---
+
+### 配置
+
+运行时配置通过环境变量读取，参考 [.env.example](.env.example)；YAML 形式的本地参考配置见 [config/local.example.yaml](config/local.example.yaml)。
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `WA_COLLECTOR_ADDR` | `:8080` | Collector 监听地址 |
+| `WA_DASHBOARD_ADDR` | `:8081` | Dashboard 监听地址 |
+| `WA_POSTGRES_DSN` | `postgres://...localhost:5432/webanalytics` | PostgreSQL 连接串 |
+| `WA_REDIS_ADDR` | `localhost:6379` | Redis 地址 |
+| `WA_REDIS_DB` | `0` | Redis DB |
+| `WA_QUEUE_DRIVER` | `redis-streams` | 队列驱动 |
+| `WA_QUEUE_STREAM` | `analytics:events` | Stream 名称 |
+| `WA_QUEUE_CONSUMER_GROUP` | `analytics-workers` | 消费者组 |
+| `WA_STORAGE_DRIVER` | `postgres` | 存储驱动 |
+| `WA_WORKER_BATCH_SIZE` | `1000` | Worker 批量写入大小 |
+| `WA_WORKER_FLUSH_INTERVAL` | `1s` | Worker 刷新间隔 |
+| `WA_ONLINE_WINDOW` | `5m` | 在线访客时间窗口 |
+| `WA_RAW_RETENTION_DAYS` | `30` | 原始事件保留天数 |
+| `WA_MINUTE_AGG_RETENTION_DAYS` | `15` | 分钟聚合保留天数 |
+| `WA_HOUR_AGG_RETENTION_DAYS` | `365` | 小时聚合保留天数 |
+| `WA_DAY_AGG_RETENTION_DAYS` | `0` | 天聚合保留天数（0 表示不限） |
+| `WA_CREATE_PARTITIONS_AHEAD_DAYS` | `7` | 提前创建分区天数 |
+
+---
 
 ### 测试
 
-Go 测试：
-
 ```bash
-GOCACHE=/Users/a1-6/Documents/workspace/Web_Analytics/.cache/go-build go test ./...
-```
+# Go 测试
+GOCACHE=$(pwd)/.cache/go-build go test ./...
 
-SDK 测试：
-
-```bash
+# SDK 测试
 npm run test:sdk
 ```
 
-### 数据流
+---
+
+### 目录结构
 
 ```text
-JS SDK -> Go Collector -> Redis Streams -> Go Workers -> PostgreSQL 原始事件分区表 + 聚合统计表
+cmd/                  服务入口（collector / dashboard / worker）
+internal/
+  collector/          采集服务与处理器
+  dashboard/          看板服务、API 处理器、静态页面（static/）
+  worker/             事件消费与聚合
+  store/              存储接口（EventStore / StatsStore）
+  storage/postgres/   PostgreSQL 适配器
+  queue/              队列接口与 Redis Streams 实现
+  domain/             事件领域模型
+  config/             环境变量配置加载
+  retention/          数据保留策略规划器
+migrations/           数据库迁移 SQL
+sdk/                  JavaScript 埋点 SDK
+config/               YAML 参考配置
+docs/                 运维文档（runbook / observability）
+tools/                压测脚本
 ```
 
-Dashboard API 应优先读取 Redis 在线状态和聚合统计表，而不是直接查询原始事件分区表。
+---
 
 ### 后续扩展方向
 
-- 队列：当前使用 Redis Streams，后续可通过 `EventPublisher` 和 `EventConsumer` 切换到 RabbitMQ 或 Kafka
-- 分析存储：当前使用 PostgreSQL，后续可通过 `EventStore` 和 `StatsStore` 接入 ClickHouse
+实现保留了清晰的扩展出口：
 
-即使未来引入 ClickHouse 作为分析事件存储，PostgreSQL 仍建议保留为用户、站点、凭证、权限和配置的系统记录库。
+- **队列**：当前 Redis Streams，后续可通过 `EventPublisher` / `EventConsumer` 切换到 RabbitMQ 或 Kafka
+- **分析存储**：当前 PostgreSQL，后续可通过 `EventStore` / `StatsStore` 接入 ClickHouse
+
+即使引入 ClickHouse 作为分析事件存储，PostgreSQL 仍建议保留为用户、站点、凭证、权限和配置的系统记录库。
+
+运维参考：[docs/runbook.md](docs/runbook.md)、[docs/observability.md](docs/observability.md)、[tools/loadtest.mjs](tools/loadtest.mjs)。
+
+---
 
 ## English
 
-Self-hosted web traffic analytics for owned websites. The first implementation targets a simple operational stack:
+Self-hosted web traffic analytics covering the full path from frontend tracking to dashboard reporting.
 
-- Go services for collection, workers, and dashboard APIs
-- Redis Streams for queue buffering and worker consumption
-- Redis online state for real-time active visitors
-- PostgreSQL for business data, raw-event partitions, and aggregate reporting tables
-- JavaScript SDK for pageview, heartbeat, and custom-event collection
+### Components
 
-The design target is 30 million events/day as the stable capacity goal and 50 million events/day as the stretch goal, assuming queue buffering, batch writes, partitioning, aggregate-first dashboard queries, and bounded raw retention.
+- **JavaScript SDK** (`sdk/tracker.mjs`): pageview, heartbeat, and custom-event collection
+- **Collector** (`cmd/collector`): validates credentials, rate-limits, publishes to the queue, marks online visitors
+- **Worker** (`cmd/worker`): batch-consumes events into raw partitions and aggregate tables
+- **Dashboard** (`cmd/dashboard`): serves JSON stats APIs plus a browser dashboard
+- **Redis Streams**: event queue / buffering
+- **Redis online state**: real-time active visitors
+- **PostgreSQL**: business data, raw-event partitions, aggregate tables
 
-## Current Status
+Capacity target: 30M events/day stable, 50M events/day stretch.
 
-This repository contains a tested first implementation skeleton. The code defines the service boundaries, migrations, SDK, collector, worker, dashboard, retention planner, and operational documents. Some production integrations are intentionally still behind interfaces:
+### Data flow
 
-- Collector entrypoint currently uses in-memory credentials and a no-op publisher.
-- Dashboard entrypoint currently uses in-memory/empty readers.
-- PostgreSQL and Redis adapters exist as boundaries, but service wiring to real clients still needs to be completed.
-- RabbitMQ/Kafka and ClickHouse are preserved as future exits through queue and storage interfaces.
+```text
+JS SDK -> Collector (POST /collect) -> Redis Streams -> Workers -> PostgreSQL (raw partitions + aggregates)
+                  └-> Redis online state
+Dashboard reads Redis online state + aggregate tables (not raw partitions).
+```
 
-## Configuration
+### Ports
 
-Runtime information is centralized in [config/local.example.yaml](/Users/a1-6/Documents/workspace/Web_Analytics/config/local.example.yaml).
+| Service | `go run` default | docker compose | Env var |
+| --- | --- | --- | --- |
+| Collector | `:8080` | `:8085` | `WA_COLLECTOR_ADDR` |
+| Dashboard | `:8081` | `:8086` | `WA_DASHBOARD_ADDR` |
+| PostgreSQL | `localhost:5432` | `localhost:5432` | `WA_POSTGRES_DSN` |
+| Redis | `localhost:6379` | `localhost:6379` | `WA_REDIS_ADDR` |
 
-Key sections:
+> docker-compose remaps the HTTP ports to 8085 / 8086 via environment variables. Plain `go run` uses 8080 / 8081.
 
-- `postgres`: PostgreSQL DSN, connection pool, migration directory
-- `redis`: Redis address, DB, online/cache key prefixes
-- `queue`: Redis Streams driver, stream name, consumer group, retry/dead-letter settings
-- `worker`: batch size and flush/idle behavior
-- `retention`: raw and aggregate retention windows
-- `capacity`: 30 million stable and 50 million stretch daily event targets
-- `future_backends`: RabbitMQ/Kafka and ClickHouse migration exits
-
-The current Go config loader reads environment variables from [.env.example](/Users/a1-6/Documents/workspace/Web_Analytics/.env.example). The YAML file is the canonical local runtime config reference and should be mirrored into environment variables until file-based config loading is added.
-
-## Local Dependencies
-
-Start PostgreSQL and Redis:
+### Getting started
 
 ```bash
+# 1. dependencies
 docker compose up -d postgres redis
-```
 
-Default local services:
+# 2. migrations
+for f in migrations/*.sql; do
+  psql "postgres://webanalytics:webanalytics@localhost:5432/webanalytics?sslmode=disable" -f "$f"
+done
 
-- PostgreSQL: `localhost:5432`
-- Redis: `localhost:6379`
-- Collector: `:8080`
-- Dashboard: `:8081`
-
-## Service Commands
-
-```bash
-go run ./cmd/collector
-go run ./cmd/dashboard
+# 3. services
+go run ./cmd/collector   # :8080
+go run ./cmd/dashboard   # :8081
 go run ./cmd/worker
-```
 
-Health checks:
-
-```bash
+# health
 curl -s http://localhost:8080/healthz
 curl -s http://localhost:8081/healthz
 ```
 
-## SDK
+Open the dashboard at `http://localhost:8081/` (or `:8086` under docker compose), enter a site ID, pick a grain and date range, and refresh.
 
-The SDK core lives in [sdk/tracker.mjs](/Users/a1-6/Documents/workspace/Web_Analytics/sdk/tracker.mjs).
+### Tracking / instrumentation
 
-It supports:
+```html
+<script type="module">
+  import { createTracker } from "/sdk/tracker.mjs";
 
-- visitor/session bootstrap
-- pageview payloads
-- heartbeat payloads
-- custom events with structured properties
+  const tracker = createTracker({
+    siteId: "site_1",
+    publicKey: "pk_xxx",
+    collectUrl: "http://localhost:8080/collect"
+  });
 
-## Tests
-
-Go tests:
-
-```bash
-GOCACHE=/Users/a1-6/Documents/workspace/Web_Analytics/.cache/go-build go test ./...
+  tracker.trackPageView();
+  setInterval(() => tracker.heartbeat(), 30_000);
+  tracker.track("signup", { plan: "pro", price: 99 });
+</script>
 ```
 
-SDK tests:
+| Method | Event type | Notes |
+| --- | --- | --- |
+| `trackPageView()` | `page_view` | current pageview |
+| `heartbeat()` | `heartbeat` | keeps online-visitor state alive |
+| `track(name, properties)` | `custom` | custom event with structured properties |
+
+The SDK auto-manages visitor/session IDs (persisted in `localStorage`), page info, UTM params, and device metadata. To bypass the SDK, POST JSON to `/collect` directly (returns `204` on success, `401` on invalid credential).
+
+### Dashboard API
+
+The dashboard service hosts both the static UI (`/`) and JSON APIs (`/api/...`).
+
+| Method / Path | Purpose |
+| --- | --- |
+| `POST /api/sites` | create a site (requires `X-Owner-User-ID` header) |
+| `GET /api/sites/{siteID}/online` | real-time online visitors |
+| `GET /api/sites/{siteID}/overview` | core metric totals |
+| `GET /api/sites/{siteID}/trend` | trend series |
+| `GET /api/sites/{siteID}/dimensions` | dimension report |
+
+Query params: `grain` (`minute`/`hour`/`day`), `from`/`to` (`2006-01-02` or RFC3339), `dimension` (`page`/`referrer`/`utm`/`device`/`geo`/`event`), `limit`.
+
+### Tests
 
 ```bash
+GOCACHE=$(pwd)/.cache/go-build go test ./...
 npm run test:sdk
 ```
 
-## Capacity And Operations
+### Status
 
-Operational guidance lives in:
+This is a tested first-implementation skeleton. The collector/dashboard entrypoints currently use in-memory credentials and empty readers; PostgreSQL and Redis adapters exist behind interfaces and wiring to real clients is still being completed. The dashboard frontend calls the real APIs, so displayed data depends on how far the backend readers are wired.
 
-- [docs/observability.md](/Users/a1-6/Documents/workspace/Web_Analytics/docs/observability.md)
-- [docs/runbook.md](/Users/a1-6/Documents/workspace/Web_Analytics/docs/runbook.md)
-- [tools/loadtest.mjs](/Users/a1-6/Documents/workspace/Web_Analytics/tools/loadtest.mjs)
+### Future backend exits
 
-The intended high-volume path is:
-
-```text
-JS SDK -> Go Collector -> Redis Streams -> Go Workers -> PostgreSQL raw partitions + aggregate tables
-```
-
-Dashboard APIs should read Redis online state and aggregate tables, not raw-event partitions.
-
-## Future Backend Exits
-
-The implementation keeps these exits explicit:
-
-- Queue: Redis Streams now, RabbitMQ or Kafka later through `EventPublisher` and `EventConsumer`.
-- Analytics store: PostgreSQL now, ClickHouse later through `EventStore` and `StatsStore`.
+- Queue: Redis Streams now, RabbitMQ or Kafka later via `EventPublisher` / `EventConsumer`.
+- Analytics store: PostgreSQL now, ClickHouse later via `EventStore` / `StatsStore`.
 
 PostgreSQL should remain the system of record for users, sites, credentials, permissions, and configuration even if ClickHouse becomes the analytical event store.

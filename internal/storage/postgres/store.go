@@ -14,6 +14,18 @@ type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) error
 }
 
+type QueryExecutor interface {
+	Executor
+	QueryContext(ctx context.Context, query string, args ...any) (Rows, error)
+}
+
+type Rows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Close() error
+	Err() error
+}
+
 type EventStore struct {
 	exec Executor
 }
@@ -113,22 +125,108 @@ func (s *StatsStore) UpsertDimensionStats(ctx context.Context, stats []store.Dim
 		if err != nil {
 			return err
 		}
-		query := fmt.Sprintf(`INSERT INTO %s (site_id, bucket, %s, page_views, unique_visitors, event_count)
-VALUES ($1, $2, $3, $4, $5, $6)
+		query := fmt.Sprintf(`INSERT INTO %s (site_id, bucket, %s, page_views, ip_count, unique_visitors, sessions, event_count)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING`, table, column)
-		if err := s.exec.ExecContext(ctx, query, stat.SiteID, stat.Bucket.UTC(), stat.Key, stat.PageViews, stat.UniqueVisitors, stat.EventCount); err != nil {
+		if err := s.exec.ExecContext(ctx, query, stat.SiteID, stat.Bucket.UTC(), stat.Key, stat.PageViews, stat.IPCount, stat.UniqueVisitors, stat.Sessions, stat.EventCount); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *StatsStore) QuerySiteStats(context.Context, store.SiteStatsQuery) (store.SiteStatsReport, error) {
-	return store.SiteStatsReport{}, fmt.Errorf("postgres stats query not implemented")
+func (s *StatsStore) QuerySiteStats(ctx context.Context, query store.SiteStatsQuery) (store.SiteStatsReport, error) {
+	db, ok := s.exec.(QueryExecutor)
+	if !ok {
+		return store.SiteStatsReport{}, fmt.Errorf("postgres stats query requires query executor")
+	}
+	table, err := siteStatsTable(query.Grain)
+	if err != nil {
+		return store.SiteStatsReport{}, err
+	}
+	clauses := []string{"site_id = $1"}
+	args := []any{query.SiteID}
+	if !query.From.IsZero() {
+		args = append(args, query.From.UTC())
+		clauses = append(clauses, fmt.Sprintf("bucket >= $%d", len(args)))
+	}
+	if !query.To.IsZero() {
+		args = append(args, query.To.UTC())
+		clauses = append(clauses, fmt.Sprintf("bucket < $%d", len(args)))
+	}
+	sql := fmt.Sprintf(`SELECT site_id, bucket, page_views, ip_count, unique_visitors, sessions, custom_events
+FROM %s
+WHERE %s
+ORDER BY bucket ASC`, table, strings.Join(clauses, " AND "))
+	rows, err := db.QueryContext(ctx, sql, args...)
+	if err != nil {
+		return store.SiteStatsReport{}, err
+	}
+	defer rows.Close()
+
+	report := store.SiteStatsReport{SiteID: query.SiteID, Grain: query.Grain}
+	for rows.Next() {
+		var row store.SiteStat
+		if err := rows.Scan(&row.SiteID, &row.Bucket, &row.PageViews, &row.IPCount, &row.UniqueVisitors, &row.Sessions, &row.CustomEvents); err != nil {
+			return store.SiteStatsReport{}, err
+		}
+		row.Grain = query.Grain
+		report.Rows = append(report.Rows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return store.SiteStatsReport{}, err
+	}
+	return report, nil
 }
 
-func (s *StatsStore) QueryDimensionStats(context.Context, store.DimensionStatsQuery) (store.DimensionStatsReport, error) {
-	return store.DimensionStatsReport{}, fmt.Errorf("postgres dimension query not implemented")
+func (s *StatsStore) QueryDimensionStats(ctx context.Context, query store.DimensionStatsQuery) (store.DimensionStatsReport, error) {
+	db, ok := s.exec.(QueryExecutor)
+	if !ok {
+		return store.DimensionStatsReport{}, fmt.Errorf("postgres dimension query requires query executor")
+	}
+	table, column, err := dimensionTarget(query.Dimension)
+	if err != nil {
+		return store.DimensionStatsReport{}, err
+	}
+	clauses := []string{"site_id = $1"}
+	args := []any{query.SiteID}
+	if !query.From.IsZero() {
+		args = append(args, query.From.UTC())
+		clauses = append(clauses, fmt.Sprintf("bucket >= $%d", len(args)))
+	}
+	if !query.To.IsZero() {
+		args = append(args, query.To.UTC())
+		clauses = append(clauses, fmt.Sprintf("bucket < $%d", len(args)))
+	}
+	limit := query.Limit
+	if limit == 0 {
+		limit = 50
+	}
+	args = append(args, limit)
+	sql := fmt.Sprintf(`SELECT site_id, bucket, %s, page_views, ip_count, unique_visitors, sessions, event_count
+FROM %s
+WHERE %s
+ORDER BY page_views DESC, unique_visitors DESC
+LIMIT $%d`, column, table, strings.Join(clauses, " AND "), len(args))
+	rows, err := db.QueryContext(ctx, sql, args...)
+	if err != nil {
+		return store.DimensionStatsReport{}, err
+	}
+	defer rows.Close()
+
+	report := store.DimensionStatsReport{SiteID: query.SiteID, Dimension: query.Dimension}
+	for rows.Next() {
+		var row store.DimensionStat
+		if err := rows.Scan(&row.SiteID, &row.Bucket, &row.Key, &row.PageViews, &row.IPCount, &row.UniqueVisitors, &row.Sessions, &row.EventCount); err != nil {
+			return store.DimensionStatsReport{}, err
+		}
+		row.Dimension = query.Dimension
+		report.Rows = append(report.Rows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return store.DimensionStatsReport{}, err
+	}
+	return report, nil
 }
 
 func (s *StatsStore) upsertSiteStatsForGrain(ctx context.Context, grain store.Grain, stats []store.SiteStat) error {
@@ -137,18 +235,19 @@ func (s *StatsStore) upsertSiteStatsForGrain(ctx context.Context, grain store.Gr
 		return err
 	}
 
-	columns := []string{"site_id", "bucket", "page_views", "unique_visitors", "sessions", "custom_events"}
+	columns := []string{"site_id", "bucket", "page_views", "ip_count", "unique_visitors", "sessions", "custom_events"}
 	args := make([]any, 0, len(stats)*len(columns))
 	rows := make([]string, 0, len(stats))
 	for i, stat := range stats {
 		offset := i*len(columns) + 1
 		rows = append(rows, placeholders(offset, len(columns)))
-		args = append(args, stat.SiteID, stat.Bucket.UTC(), stat.PageViews, stat.UniqueVisitors, stat.Sessions, stat.CustomEvents)
+		args = append(args, stat.SiteID, stat.Bucket.UTC(), stat.PageViews, stat.IPCount, stat.UniqueVisitors, stat.Sessions, stat.CustomEvents)
 	}
 
 	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES %s
 ON CONFLICT (site_id, bucket) DO UPDATE SET
     page_views = %s.page_views + EXCLUDED.page_views,
+    ip_count = %s.ip_count + EXCLUDED.ip_count,
     unique_visitors = %s.unique_visitors + EXCLUDED.unique_visitors,
     sessions = %s.sessions + EXCLUDED.sessions,
     custom_events = %s.custom_events + EXCLUDED.custom_events,
@@ -156,6 +255,7 @@ ON CONFLICT (site_id, bucket) DO UPDATE SET
 		table,
 		strings.Join(columns, ", "),
 		strings.Join(rows, ", "),
+		table,
 		table,
 		table,
 		table,

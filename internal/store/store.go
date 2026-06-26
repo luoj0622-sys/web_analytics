@@ -27,13 +27,14 @@ type StatsStore interface {
 }
 
 type SiteStat struct {
-	SiteID         string
-	Grain          Grain
-	Bucket         time.Time
-	PageViews      int64
-	UniqueVisitors int64
-	Sessions       int64
-	CustomEvents   int64
+	SiteID         string    `json:"site_id"`
+	Grain          Grain     `json:"grain"`
+	Bucket         time.Time `json:"bucket"`
+	PageViews      int64     `json:"page_views"`
+	IPCount        int64     `json:"ip_count"`
+	UniqueVisitors int64     `json:"unique_visitors"`
+	Sessions       int64     `json:"sessions"`
+	CustomEvents   int64     `json:"custom_events"`
 }
 
 type SiteStatsQuery struct {
@@ -61,13 +62,15 @@ const (
 )
 
 type DimensionStat struct {
-	SiteID         string
-	Dimension      Dimension
-	Bucket         time.Time
-	Key            string
-	PageViews      int64
-	UniqueVisitors int64
-	EventCount     int64
+	SiteID         string    `json:"site_id"`
+	Dimension      Dimension `json:"dimension"`
+	Bucket         time.Time `json:"bucket"`
+	Key            string    `json:"key"`
+	PageViews      int64     `json:"page_views"`
+	IPCount        int64     `json:"ip_count"`
+	UniqueVisitors int64     `json:"unique_visitors"`
+	Sessions       int64     `json:"sessions"`
+	EventCount     int64     `json:"event_count"`
 }
 
 type DimensionStatsQuery struct {

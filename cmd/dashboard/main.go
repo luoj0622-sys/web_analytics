@@ -27,6 +27,7 @@ func main() {
 		Stats:  dashboard.EmptyStatsReader{},
 	}))
 	mux.Handle("/api/sites/", dashboardHandler)
+	mux.Handle("/", dashboard.StaticHandler())
 
 	slog.Info("dashboard listening", "addr", cfg.HTTP.DashboardAddr)
 	if err := http.ListenAndServe(cfg.HTTP.DashboardAddr, httpx.RequestIDMiddleware(mux)); err != nil {

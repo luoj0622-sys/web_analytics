@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"time"
 
 	"webanalytics/internal/store"
 )
@@ -31,11 +32,16 @@ func NewService(deps ServiceDeps) *Service {
 type Query struct {
 	SiteID string
 	Grain  store.Grain
+	From   time.Time
+	To     time.Time
 }
 
 type DimensionQuery struct {
 	SiteID    string
 	Dimension store.Dimension
+	From      time.Time
+	To        time.Time
+	Limit     int
 }
 
 type OnlineResult struct {
@@ -44,11 +50,16 @@ type OnlineResult struct {
 }
 
 type OverviewResult struct {
-	SiteID         string `json:"site_id"`
-	PageViews      int64  `json:"page_views"`
-	UniqueVisitors int64  `json:"unique_visitors"`
-	Sessions       int64  `json:"sessions"`
-	CustomEvents   int64  `json:"custom_events"`
+	SiteID               string `json:"site_id"`
+	PageViews            int64  `json:"page_views"`
+	IPCount              int64  `json:"ip_count"`
+	UniqueVisitors       int64  `json:"unique_visitors"`
+	Sessions             int64  `json:"sessions"`
+	CustomEvents         int64  `json:"custom_events"`
+	ActiveVisitors       int64  `json:"active_visitors"`
+	SummedActiveVisitors int64  `json:"summed_active_visitors"`
+	CumulativeVisitors   int64  `json:"cumulative_visitors"`
+	BlendedVisitors      int64  `json:"blended_visitors"`
 }
 
 type TrendResult struct {
@@ -72,22 +83,32 @@ func (s *Service) Online(ctx context.Context, siteID string) (OnlineResult, erro
 }
 
 func (s *Service) Overview(ctx context.Context, query Query) (OverviewResult, error) {
-	report, err := s.deps.Stats.QuerySiteStats(ctx, store.SiteStatsQuery{SiteID: query.SiteID, Grain: query.Grain})
+	report, err := s.deps.Stats.QuerySiteStats(ctx, store.SiteStatsQuery{SiteID: query.SiteID, Grain: query.Grain, From: query.From, To: query.To})
 	if err != nil {
 		return OverviewResult{}, err
 	}
 	result := OverviewResult{SiteID: query.SiteID}
 	for _, row := range report.Rows {
 		result.PageViews += row.PageViews
+		result.IPCount += row.IPCount
 		result.UniqueVisitors += row.UniqueVisitors
 		result.Sessions += row.Sessions
 		result.CustomEvents += row.CustomEvents
 	}
+	if s.deps.Online != nil {
+		result.ActiveVisitors, err = s.deps.Online.CountOnline(ctx, query.SiteID)
+		if err != nil {
+			return OverviewResult{}, err
+		}
+	}
+	result.SummedActiveVisitors = result.UniqueVisitors
+	result.CumulativeVisitors = result.UniqueVisitors
+	result.BlendedVisitors = maxInt64(result.CumulativeVisitors, result.ActiveVisitors)
 	return result, nil
 }
 
 func (s *Service) Trend(ctx context.Context, query Query) (TrendResult, error) {
-	report, err := s.deps.Stats.QuerySiteStats(ctx, store.SiteStatsQuery{SiteID: query.SiteID, Grain: query.Grain})
+	report, err := s.deps.Stats.QuerySiteStats(ctx, store.SiteStatsQuery{SiteID: query.SiteID, Grain: query.Grain, From: query.From, To: query.To})
 	if err != nil {
 		return TrendResult{}, err
 	}
@@ -95,9 +116,16 @@ func (s *Service) Trend(ctx context.Context, query Query) (TrendResult, error) {
 }
 
 func (s *Service) DimensionReport(ctx context.Context, query DimensionQuery) (DimensionResult, error) {
-	report, err := s.deps.Stats.QueryDimensionStats(ctx, store.DimensionStatsQuery{SiteID: query.SiteID, Dimension: query.Dimension})
+	report, err := s.deps.Stats.QueryDimensionStats(ctx, store.DimensionStatsQuery{SiteID: query.SiteID, Dimension: query.Dimension, From: query.From, To: query.To, Limit: query.Limit})
 	if err != nil {
 		return DimensionResult{}, err
 	}
 	return DimensionResult{SiteID: report.SiteID, Dimension: report.Dimension, Rows: report.Rows}, nil
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
